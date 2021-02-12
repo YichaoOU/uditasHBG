@@ -1231,7 +1231,9 @@ def align_genome_local(dir_sample, amplicon_info, assembly, check_plasmid_insert
 	subprocess.call(create_bam_genome_local_index_command)
 	# add socrates
 	create_SV_prediction_command = ['java','-Xmx40g','-jar','/home/yli11/HemTools/share/script/jar/socrates-1.13.1-jar-with-dependencies.jar','-t',str(ncpu),'--keep-duplicates',os.environ.get('BOWTIE2_INDEXES')+assembly,file_sorted_bam_genome_local]
-	subprocess.call(create_SV_prediction_command)
+	print ("RUNNING SV prediction")
+	print (" ".join(create_SV_prediction_command))
+	subprocess.call(create_SV_prediction_command,cwd=os.path.dirname(file_sorted_bam_genome_local))
 
 	os.chdir(initial_dir)
 
