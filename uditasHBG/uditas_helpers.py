@@ -1207,7 +1207,7 @@ def align_genome_local(dir_sample, amplicon_info, assembly, check_plasmid_insert
 	handle_sam_report_genome_local = open(file_sam_report_genome_local, 'wb')
 
 	subprocess.call(bowtie2_command, stderr=handle_sam_report_genome_local)
-
+	
 	handle_sam_report_genome_local.close()
 
 	# convert sam to bam
@@ -1232,9 +1232,14 @@ def align_genome_local(dir_sample, amplicon_info, assembly, check_plasmid_insert
 	# add socrates
 	create_SV_prediction_command = ['java','-Xmx40g','-jar','/home/yli11/HemTools/share/script/jar/socrates-1.13.1-jar-with-dependencies.jar','-t',str(ncpu),'--keep-duplicates',os.environ.get('BOWTIE2_INDEXES')+assembly,file_sorted_bam_genome_local]
 	print ("RUNNING SV prediction")
+	SV_err = os.path.dirname(file_sorted_bam_genome_local) + "/socrates.err"
+	SV_out = os.path.dirname(file_sorted_bam_genome_local) + "/socrates.out"
+	SV_err_handle = open(SV_err, 'wb')
+	SV_out_handle = open(SV_out, 'wb')
 	print (" ".join(create_SV_prediction_command))
-	subprocess.call(create_SV_prediction_command,cwd=os.path.dirname(file_sorted_bam_genome_local))
-
+	subprocess.call(create_SV_prediction_command,cwd=os.path.dirname(file_sorted_bam_genome_local),stderr=SV_err_handle,stdout=SV_out_handle)
+	SV_err_handle.close()
+	SV_out_handle.close()
 	os.chdir(initial_dir)
 
 
@@ -1352,7 +1357,8 @@ def create_barcode_dict(filename):
 def parse_indels(aligned_read):
 	indels = []
 
-	if not aligned_read.is_unmapped and not aligned_read.is_secondary:  # We only look at primary alignments
+	# if not aligned_read.is_unmapped and not aligned_read.is_secondary:  # We only look at primary alignments
+	if not aligned_read.is_unmapped:  # We only look at primary alignments
 		ref_i = aligned_read.reference_start
 		for operation, length in aligned_read.cigartuples:
 			if operation == 0:
@@ -1405,7 +1411,8 @@ def find_indels(bam_file, strand, region_chr, region_start, region_end, UMI_dict
 		if not read.is_unmapped and (((read.reference_start < region_start) and
 				 (read.reference_end > region_end)) and
 					read.mapping_quality >= min_MAPQ and
-					read_AS >= min_AS and  not read.is_secondary):
+					read_AS >= min_AS):
+					# read_AS >= min_AS and  not read.is_secondary):
 			read_indels = parse_indels(read)
 			# if no indels found, write 0
 			if len(read_indels) == 0:
@@ -1426,10 +1433,13 @@ def find_indels(bam_file, strand, region_chr, region_start, region_end, UMI_dict
 					   'position': position_list,
 					   'indel': indel_list,
 					   'UMI': UMI_list})
+	print ("find_indels before",df.shape)
 	df = df[~df['read_name'].isin(used_read_names)]
+	print ("find_indels after",df.shape)
 	used_read_names += names_list
+	df = df.reset_index(drop=True)
 	df['position_end'] = df.position + np.abs(df.indel)
-
+	
 	overlap = [get_intersection(df.loc[index]['position'], df.loc[index]['position_end'], region_start, region_end)
 			   for index in range(df.shape[0])]
 
@@ -1909,7 +1919,8 @@ def analyze_alignments_genome_global(dir_sample, amplicon_info, min_MAPQ, min_AS
 			read_AS = read.get_tag('AS')
 		# We test first if the read is unmapped, otherwise read_AS would be undefined
 		if not read.is_unmapped and (read.mapping_quality >= min_MAPQ
-									 and read_AS >= min_AS and not read.is_secondary):
+									 and read_AS >= min_AS):
+									 # and read_AS >= min_AS and not read.is_secondary):
 			UMI_list_genome.append(UMI_dict[read.query_name][0])
 			names_list_genome.append(read.query_name)
 
