@@ -7,7 +7,7 @@
 from __future__ import print_function
 
 import pandas as pd
-
+import glob
 import uditas_helpers
 
 import argparse
@@ -34,6 +34,7 @@ def main():
 													'reference genome being used'),
 						default=os.environ.get('GENOMES_2BIT', os.path.join('/', 'reference', 'genomes_2bit')))
 	parser.add_argument("-skip_demultiplexing", help='Skip demultiplexing? Options: 0, 1 (skip)', default=0)
+	parser.add_argument("-only_summarize", help='only_summarize? Options: 0 (skip), 1 ', default=0)
 	parser.add_argument("-skip_trimming", help='Skip adapter trimming? Options: 0, 1 (skip)', default=0)
 	parser.add_argument("-skip_genome_local_alignment", help='Skip genome-wide local alignment? Options: 0 , 1 (skip)',
 						default=0)
@@ -66,6 +67,7 @@ def main():
 	dir_sample = os.path.abspath(os.path.join(os.getcwd(), args.dir_sample))
 	folder_genome_2bit = args.folder_genome_2bit
 	skip_demultiplexing = int(args.skip_demultiplexing)
+	only_summarize = int(args.only_summarize)
 	# print ("skip_demultiplexing",skip_demultiplexing)
 	skip_trimming = int(args.skip_trimming)
 	skip_genome_local_alignment = int(args.skip_genome_local_alignment)
@@ -82,16 +84,67 @@ def main():
 	process_AMP_seq_run = int(args.process_AMP_seq_run)
 
 	print('\nUDiTaS version ' + __version__ + '\n\n')
+	
+	sample_info_filename = os.path.join(dir_sample, 'sample_info.csv')
 
+	experiments = pd.read_csv(sample_info_filename)
+	experiments = experiments.dropna(how='all')
+	
+	if only_summarize == 1:
+		df_list = [pd.read_csv(x,index_col=0) for x in glob.glob("*/results_alignments_junction.csv")]
+		all_results_alignments_junction = pd.concat(df_list)
+		df_list = [pd.read_csv(x,index_col=0) for x in glob.glob("*/summary_all_alignments.csv")]
+		all_samples_summary_alignments = pd.concat(df_list)
+		all_results_dir = os.path.join(dir_sample, 'all_results')
+		if not os.path.exists(all_results_dir):
+			os.mkdir(all_results_dir)
+		results_all = pd.concat([experiments, all_results_alignments_junction], axis=1)
+		results_all['version'] = __version__
+		results_all['args'] = repr(vars(args))
+		results_all.to_excel(os.path.join(all_results_dir, 'results_combined_detailed.xlsx'))
+		results_summary = uditas_helpers.summarize_results(all_results_alignments_junction)
+		results_summary_with_experiments = pd.concat([experiments, results_summary], axis=1)
+
+		results_summary_with_experiments['version'] = __version__
+		results_summary_with_experiments['args'] = repr(vars(args))
+		results_summary_with_experiments.to_excel(os.path.join(all_results_dir, 'results_summary.xlsx'))
+
+		results_pivot = uditas_helpers.melt_results(results_summary_with_experiments)
+		results_pivot.to_excel(os.path.join(all_results_dir, 'results_summary_pivot.xlsx'))
+
+		cols_to_use = all_samples_summary_alignments.columns.difference(results_summary_with_experiments.columns)
+
+		big_results = pd.merge(results_summary_with_experiments, all_samples_summary_alignments[cols_to_use],
+							   left_index=True, right_index=True, how='outer')
+
+		summarized_big_results = uditas_helpers.summarize_big_results(big_results)
+		experiments['version'] = __version__
+		experiments['args'] = repr(vars(args))
+
+		dir_sample_basename = os.path.basename(os.path.normpath(dir_sample))
+		final_results = pd.concat([experiments, summarized_big_results], axis=1)
+		final_results.to_excel(os.path.join(all_results_dir, dir_sample_basename +
+											'_' + 'big_results.xlsx'), index=None)
+
+		final_results_pivot = uditas_helpers.melt_summarize_big_results(final_results)
+		pd.set_option('max_columns', None)
+
+		print (final_results_pivot[final_results_pivot['Editing Type']=='Large Deletion'])
+		final_results_pivot.to_excel(os.path.join(all_results_dir, dir_sample_basename +
+											'_' + 'big_results_pivot.xlsx'), index=None)
+		exit()
+		
+		
+		
+		
+		
+		
 	# Call to demultiplexing step
 	if skip_demultiplexing == 0:
 		print ("Start demultiplex")
 		uditas_helpers.demultiplex(dir_sample)
 
-	sample_info_filename = os.path.join(dir_sample, 'sample_info.csv')
 
-	experiments = pd.read_csv(sample_info_filename)
-	experiments = experiments.dropna(how='all')
 	read_count = pd.DataFrame()
 	# Make list of samples to process
 	processing_all_amplicons = (process_amplicon == 'all')
@@ -103,8 +156,14 @@ def main():
 	print('Processing UDiTaS data in folder ' + dir_sample)
 
 	for i in processing_list:
+		
 		amplicon_info = experiments.loc[i]
 		assembly = amplicon_info['genome']
+		
+		N7 = amplicon_info['index_I1']
+		N5 = amplicon_info['index_I2']
+		mainfolder = uditas_helpers.create_filename(dir_sample, N7, N5, "mainfolder")
+		print ("mainfolder",mainfolder)
 		# print ("folder_genome_2bit",folder_genome_2bit,"assembly",assembly)
 		file_genome_2bit = os.path.join(folder_genome_2bit, assembly + '.2bit')
 		if skip_trimming == 0:
@@ -146,7 +205,7 @@ def main():
 		result_reads_in_all_amplicons_df.index = [i]
 
 		results_alignments_junction = pd.concat([result_amplicon_df, result_plasmid_df], axis=1)
-
+		results_alignments_junction.to_csv(mainfolder+"/results_alignments_junction.csv")
 		if processing_all_amplicons:
 			try:
 				all_results_alignments_junction = pd.concat([all_results_alignments_junction,
@@ -185,7 +244,7 @@ def main():
 																		   read_count.loc[[i]], result_plasmid_df,
 																		   result_reads_in_all_amplicons_df,
 																		   results_genome_global_df)
-
+		summary_all_alignments.to_csv(mainfolder+"/summary_all_alignments.csv")
 		try:
 			all_samples_summary_alignments = pd.concat([all_samples_summary_alignments, summary_all_alignments], axis=0)
 		except NameError:  # Initialize
@@ -224,6 +283,9 @@ def main():
 											'_' + 'big_results.xlsx'), index=None)
 
 		final_results_pivot = uditas_helpers.melt_summarize_big_results(final_results)
+		pd.set_option('max_columns', None)
+
+		print (final_results_pivot[final_results_pivot['Editing Type']=='Large Deletion'])
 		final_results_pivot.to_excel(os.path.join(all_results_dir, dir_sample_basename +
 											'_' + 'big_results_pivot.xlsx'), index=None)
 

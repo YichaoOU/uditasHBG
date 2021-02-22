@@ -626,6 +626,10 @@ def write_amplicon(dir_sample, amplicon_info, amplicon_list):
 	index_out_fh = open(index_out_file, 'wb')
 	subprocess.call(['bowtie2-build',
 					 filename, 'amplicons'], stderr=index_err_fh, stdout=index_out_fh)
+	# print ("bwa index -p amplicons %s"%(filename))
+	# subprocess.call(['bwa index',
+					 # filename, '-p amplicons'])
+	# os.system("bwa index -p amplicons %s"%(filename))
 	os.chdir(initial_dir)
 	index_err_fh.close()
 	index_out_fh.close()
@@ -990,7 +994,7 @@ def align_plasmid_local(dir_sample, amplicon_info, ncpu=4):
 	os.chdir(folder_amplicons)
 
 	bowtie2_command = ['bowtie2', '--local', '-p', str(ncpu),
-					   '-X', '5000', '-k', '2', '-x', 'plasmid',
+					   '-X', '8000', '-k', '2', '-x', 'plasmid',
 							 '-1', file_cutadapt_R1, '-2', file_cutadapt_R2,
 							 '-S', file_sam_plasmid_local]
 
@@ -1200,7 +1204,7 @@ def align_genome_local(dir_sample, amplicon_info, assembly, check_plasmid_insert
 	initial_dir = os.getcwd()
 	
 	bowtie2_command = ['bowtie2', '--local', '-p', str(ncpu),
-					   '-X', '5000', '-k', '2', '-x', os.environ.get('BOWTIE2_INDEXES')+assembly,
+					   '-X', '8000', '-k', '2', '-x', os.environ.get('BOWTIE2_INDEXES')+assembly,
 							 '-1', file_R1, '-2', file_R2,
 							 '-S', file_sam_genome_local]
 
@@ -1287,10 +1291,9 @@ def align_amplicon(dir_sample, amplicon_info, check_plasmid_insertions, ncpu=4):
 
 	os.chdir(folder_amplicons)
 	bowtie2_command = ['bowtie2', '-p', str(ncpu), '--very-sensitive',
-					   '-X', '5000', '-k', '5', '-x', 'amplicons',
+					   '-X', '3000', '-a', '-x', 'amplicons',
 					   '-1', file_R1, '-2', file_R2,
 					   '-S', file_sam_amplicons]
-
 	handle_sam_report_amplicons = open(file_sam_report_amplicons, 'wb')
 
 	subprocess.call(bowtie2_command, stderr=handle_sam_report_amplicons)
@@ -1298,7 +1301,8 @@ def align_amplicon(dir_sample, amplicon_info, check_plasmid_insertions, ncpu=4):
 	handle_sam_report_amplicons.close()
 
 	# convert sam to bam
-	sam_to_bam_amplicons_command = ['samtools', 'view', '-Sb', file_sam_amplicons]
+	sam_to_bam_amplicons_command = ['samtools', 'view','-f','3', '-Sb', file_sam_amplicons]
+	# sam_to_bam_amplicons_command = ['samtools', 'view', '-Sb', file_sam_amplicons]
 
 	handle_file_bam_amplicons = open(file_bam_amplicons, 'wb')
 
@@ -1369,7 +1373,11 @@ def parse_indels(aligned_read):
 				indels.append((ref_i, -length))
 				ref_i += length
 			else:
-				print >> sys.stderr, 'Unrecognized CIGAR operation for %s' % aligned_read.query_name
+				print (operation)
+				print (aligned_read.cigartuples)
+				# print >> sys.stderr, 'Unrecognized CIGAR operation for %s' % aligned_read.query_name
+				print('Unrecognized CIGAR operation for %s' % aligned_read.query_name, file=sys.stderr)
+
 
 	return indels
 
@@ -1382,7 +1390,13 @@ def get_intersection(region1_begin, region1_end, region2_begin, region2_end):
 	list2 = range(int(region2_begin) + 1, int(region2_end) + 1)
 	return len(set(list1).intersection(list2))
 
-
+def get_ref_seq(r):
+	out = []
+	for a,b,c in r.get_aligned_pairs(with_seq=True):
+		if b == None:
+			continue
+		out.append(c.upper())
+	return "".join(out)
 ################################################################################
 # find_indels
 #
@@ -1390,7 +1404,10 @@ def get_intersection(region1_begin, region1_end, region2_begin, region2_end):
 #  bam_file:			   alignments file to process
 #
 ################################################################################
-def find_indels(bam_file, strand, region_chr, region_start, region_end, UMI_dict, min_MAPQ, min_AS,used_read_names):
+def find_indels(bam_file, strand, region_chr, region_start, region_end, UMI_dict, min_MAPQ, min_AS,used_read_names,prefix):
+	# print ("##################")
+	# print (bam_file)
+	# exit()
 	bam_in_alignment_file = pysam.AlignmentFile(bam_file, 'rb')
 
 	# We get the reads that overlap the window in which we make the counts
@@ -1403,8 +1420,12 @@ def find_indels(bam_file, strand, region_chr, region_start, region_end, UMI_dict
 	position_list = []
 	indel_list = []
 	UMI_list = []
+	read_seq = []
+	insertion_size = []
 	for read in bam_in:
 		# We add here a check to make sure the read came from the primer, crossed the cut and covered the whole window
+		if not read.is_proper_pair:
+			continue
 		if read.has_tag('AS'):
 			read_AS = read.get_tag('AS')
 		# We test first if the read is unmapped, otherwise read_AS would be undefined
@@ -1413,6 +1434,8 @@ def find_indels(bam_file, strand, region_chr, region_start, region_end, UMI_dict
 					read.mapping_quality >= min_MAPQ and
 					read_AS >= min_AS):
 					# read_AS >= min_AS and  not read.is_secondary):
+			tlen = abs(read.template_length)
+			
 			read_indels = parse_indels(read)
 			# if no indels found, write 0
 			if len(read_indels) == 0:
@@ -1421,6 +1444,8 @@ def find_indels(bam_file, strand, region_chr, region_start, region_end, UMI_dict
 			# print indels to table
 			for pos, indel in read_indels:
 				names_list.append(read.query_name)
+				insertion_size.append(tlen)
+				read_seq.append(get_ref_seq(read))
 				if pos == '-':
 					position_list.append(-1)
 				else:
@@ -1432,14 +1457,20 @@ def find_indels(bam_file, strand, region_chr, region_start, region_end, UMI_dict
 	df = pd.DataFrame({'read_name': names_list,
 					   'position': position_list,
 					   'indel': indel_list,
+					   'read_seq': read_seq,
+					   'insertion_size': insertion_size,
 					   'UMI': UMI_list})
 	print ("find_indels before",df.shape)
+	df.to_csv(bam_file+"."+prefix+".before.tsv",sep="\t",index=False)
+	# print (df.head())
 	df = df[~df['read_name'].isin(used_read_names)]
+	df = df[df.insertion_size >= 200]
 	print ("find_indels after",df.shape)
 	used_read_names += names_list
 	df = df.reset_index(drop=True)
 	df['position_end'] = df.position + np.abs(df.indel)
-	
+	df.to_csv(bam_file+"."+prefix+".after.tsv",sep="\t",index=False)
+	df['read_name'].to_csv(bam_file+"."+prefix+".after.list",header=False,index=False)
 	overlap = [get_intersection(df.loc[index]['position'], df.loc[index]['position_end'], region_start, region_end)
 			   for index in range(df.shape[0])]
 
@@ -1637,6 +1668,14 @@ def get_cut_in_reference_amplicon_df(amplicon_info, reaction_type, record, stran
 	return cut_in_reference_amplicon_df
 
 
+def to_amplicon_chr_bam(file_sorted_bam_amplicons,region_chr):
+	# get read list
+	# file1 = 
+	command = "cat "+file_sorted_bam_amplicons+"."+region_chr+"*.after.list > %s.%s.read.list"%(file_sorted_bam_amplicons,region_chr)
+	os.system(command)
+	command = "java -jar /hpcf/apps/picard/install/2.9.4/picard.jar FilterSamReads I={0} O={0}.{1}.bam READ_LIST_FILE={0}.{1}.read.list FILTER=includeReadList;samtools index {0}.{1}.bam".format(file_sorted_bam_amplicons,region_chr)
+	os.system(command)
+	
 ################################################################################
 #  Function to analyze indels and structural rearrangements from aligned reads to amplicons
 ################################################################################
@@ -1692,21 +1731,24 @@ def analyze_alignments(dir_sample, amplicon_info, window_size, amplicon_window_a
 		# We go over cut1 and cut2 and when using cut1 we check if we are in control sample
 		for i in cut_df.index:
 			cut = cut_df.loc[i, 'cut_type']
-			cut_position = cut_df.loc[i, 'cut_position']
 			region_chr = record.name
-
-			region_start = cut_position - window_size
-			region_end = cut_position + window_size + 1
-
-			results = find_indels(file_sorted_bam_amplicons, strand, region_chr, region_start, region_end, UMI_dict,
-								  min_MAPQ, min_AS,used_read_names)
-			# This is to catch the control case, no cut there
-			
 			if len(cut) > 0:
 				prefix = region_chr + '_' + cut
 			else:
 				prefix = region_chr
+			cut_position = cut_df.loc[i, 'cut_position']
+			
 
+			region_start = cut_position - window_size
+			region_end = cut_position + window_size + 1
+			# print ("----------")
+			# exit()
+			results = find_indels(file_sorted_bam_amplicons, strand, region_chr, region_start, region_end, UMI_dict,
+								  min_MAPQ, min_AS,used_read_names,prefix)
+			# This is to catch the control case, no cut there
+			
+
+			print ("Analysing:",prefix)
 			results_df[prefix + '_total_reads'] = [results[0]]
 			results_df[prefix + '_total_indels'] = [results[1]]
 			results_df[prefix + '_total_deletions'] = [results[2]]
@@ -1715,10 +1757,12 @@ def analyze_alignments(dir_sample, amplicon_info, window_size, amplicon_window_a
 			results_df[prefix + '_total_indels_collapsed'] = [results[5]]
 			results_df[prefix + '_total_deletions_collapsed'] = [results[6]]
 			results_df[prefix + '_total_insertions_collapsed'] = [results[7]]
+		
+		to_amplicon_chr_bam(file_sorted_bam_amplicons,region_chr)
 		print (record.name,"processed",len(used_read_names),"reads")
 	median_size = analyze_fragment_sizes(dir_sample, amplicon_info, min_MAPQ)
 	results_df['median_fragment_size'] = [median_size]
-
+	# df.to_csv(file_sorted_bam_amplicons)
 	results_df.to_excel(results_file)
 	return results_df
 
@@ -1852,7 +1896,7 @@ def align_genome_global(dir_sample, amplicon_info, assembly, ncpu=4):
 	initial_dir = os.getcwd()
 
 	bowtie2_command = ['bowtie2', '--very-sensitive', '-p', str(ncpu),
-					   '-X', '5000', '-k', '3', '-x', os.environ.get('BOWTIE2_INDEXES')+assembly,
+					   '-X', '8000', '-k', '3', '-x', os.environ.get('BOWTIE2_INDEXES')+assembly,
 					   '-1', file_R1, '-2', file_R2,
 					   '-S', file_sam_genome_global]
 
